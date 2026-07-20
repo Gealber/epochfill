@@ -162,7 +162,3 @@ trading P&L.
 - Archive publication lags roughly 3 epochs.
 - `ts` is when the row was written, not block time. If you need block time, the
   `slot-to-blocktime` index is only 1.7 MB.
-
-## License
-
-MIT
