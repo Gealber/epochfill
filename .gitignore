@@ -1,0 +1,16 @@
+# Downloaded Old Faithful indexes (tens of GB) and their resume sidecars.
+indexes/
+*.index
+*.parts
+*.tar.zstd
+
+# Output databases.
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Local config and build artefacts.
+.env
+build/
+epochfill
