@@ -17,20 +17,6 @@ import (
 // BaseFeeLamports is the per-signature base fee. Priority fee = total − base·nsigs.
 const BaseFeeLamports = 5000
 
-// JitoTips are the eight mainnet Jito tip accounts. A transaction paying one of
-// them is riding the public Jito bundle auction, which is worth distinguishing
-// from a plain priority-fee bid.
-var JitoTips = map[string]struct{}{
-	"96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5": {},
-	"HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe": {},
-	"Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY": {},
-	"ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49": {},
-	"DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh": {},
-	"ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt": {},
-	"DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL": {},
-	"3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT": {},
-}
-
 // Landing is one observed transaction of the tracked wallet, fully resolved for
 // analysis. All fields are plain scalars so the row is cheap to copy and store.
 type Landing struct {
@@ -67,9 +53,17 @@ type Landing struct {
 	// WSOL is 1:1 SOL, so this is the arb's realized output; NET PROFIT is
 	// WsolDeltaLamports + SolDeltaLamports (output minus the native fee).
 	WsolDeltaLamports int64
-	// TipLamports is the sum paid to any Jito tip account in this tx.
+	// TipLamports is the sum paid to ANY out-of-protocol tip account in this tx —
+	// Jito, bloXroute, Helius Sender or Nozomi. Together with PriorityFeeLamports
+	// this is what the sender actually spent to be placed; priority alone
+	// understates a Helius or Nozomi transaction by orders of magnitude.
 	TipLamports uint64
-	// IsTipLeg is true when this tx pays a Jito tip (bundle tip leg).
+	// TipLane names the lane(s) paid, comma-joined when a tx pays more than one.
+	// Empty when no tip was paid.
+	TipLane string
+	// IsTipLeg is true only for a BARE tip transaction: it paid a tip and ran
+	// nothing but System and ComputeBudget. A tip carried inside real work
+	// (which is how Helius Sender works) is NOT a tip leg — see IsBareTipLeg.
 	IsTipLeg bool
 	// NumIx is the top-level instruction count (tip legs are tiny).
 	NumIx int
@@ -99,6 +93,7 @@ func OpenDB(path string) (*sql.DB, error) {
 	for _, col := range []string{
 		`ALTER TABLE landing ADD COLUMN cu_consumed INTEGER`,
 		`ALTER TABLE landing ADD COLUMN cost_units INTEGER`,
+		`ALTER TABLE landing ADD COLUMN tip_lane TEXT`,
 	} {
 		_, _ = db.Exec(col)
 	}
@@ -113,7 +108,7 @@ func (l *Landing) Args() []any {
 		l.Leader, l.LeaderVersion, boolInt(l.Landed), l.FeeLamports,
 		l.PriorityFeeLamports, l.SolDeltaLamports, l.WsolDeltaLamports,
 		l.TipLamports, boolInt(l.IsTipLeg), l.NumIx, l.Programs, l.Ts,
-		l.CuConsumed, l.CostUnits,
+		l.CuConsumed, l.CostUnits, l.TipLane,
 	}
 }
 
@@ -152,7 +147,8 @@ CREATE TABLE IF NOT EXISTS landing (
   programs               TEXT,
   ts                     INTEGER,
   cu_consumed            INTEGER,
-  cost_units             INTEGER
+  cost_units             INTEGER,
+  tip_lane               TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_landing_leader ON landing(leader);
 CREATE INDEX IF NOT EXISTS idx_landing_slot ON landing(slot);
@@ -163,7 +159,8 @@ const InsertSQL = `
 INSERT INTO landing (
   sig, slot, block_index, block_tx_count, position_pct, leader, leader_version,
   landed, fee_lamports, priority_fee_lamports, sol_delta_lamports,
-  wsol_delta_lamports, tip_lamports, is_tip_leg, n_ix, programs, ts, cu_consumed, cost_units
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  wsol_delta_lamports, tip_lamports, is_tip_leg, n_ix, programs, ts, cu_consumed, cost_units,
+  tip_lane
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(sig) DO NOTHING;
 `

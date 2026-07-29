@@ -85,8 +85,8 @@ func BuildLanding(pt *ParsedTx, wallet, leader string, slot, txCount uint64) (*l
 		CostUnits:           meta.GetCostUnits(),
 		Programs:            programSet(tx, meta, keys),
 	}
-	l.TipLamports = tipPaid(keys, meta)
-	l.IsTipLeg = l.TipLamports > 0
+	l.TipLamports, l.TipLane = tipPaid(keys, meta)
+	l.IsTipLeg = landing.IsBareTipLeg(l.Programs, l.TipLamports)
 	applyPosition(l, pt.Node, txCount)
 	return l, nil
 }
@@ -147,19 +147,31 @@ func walletDelta(keys []solana.PublicKey, meta *confirmed_block.TransactionStatu
 	return 0
 }
 
-// tipPaid sums positive lamport deltas landing on any Jito tip account.
-func tipPaid(keys []solana.PublicKey, meta *confirmed_block.TransactionStatusMeta) uint64 {
+// tipPaid sums positive lamport deltas landing on any out-of-protocol tip
+// account and names the lane(s) paid. Reading balance DELTAS rather than parsing
+// transfer instructions is what makes this ALT- and CPI-proof: keys already
+// carries the lookup-table addresses, and a tip paid through a CPI still moves
+// the destination's balance.
+func tipPaid(keys []solana.PublicKey, meta *confirmed_block.TransactionStatusMeta) (uint64, string) {
 	pre, post := meta.GetPreBalances(), meta.GetPostBalances()
 	var tip uint64
+	var lanes []string
+	seen := make(map[string]struct{})
 	for i, k := range keys {
-		if _, ok := landing.JitoTips[k.String()]; !ok {
+		lane, ok := landing.TipAccounts[k.String()]
+		if !ok {
 			continue
 		}
 		if i < len(pre) && i < len(post) && post[i] > pre[i] {
 			tip += post[i] - pre[i]
+			if _, dup := seen[lane]; !dup {
+				seen[lane] = struct{}{}
+				lanes = append(lanes, lane)
+			}
 		}
 	}
-	return tip
+	sort.Strings(lanes)
+	return tip, strings.Join(lanes, ",")
 }
 
 // programSet is the sorted, comma-joined set of program IDs (top-level + inner).
