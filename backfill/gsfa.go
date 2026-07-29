@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gagliardetto/solana-go"
 	"github.com/klauspost/compress/zstd"
@@ -193,7 +194,12 @@ func writeFile(path string, r io.Reader, size int64) error {
 		dst = &countingWriter{w: f, onWrite: bar.Set}
 	}
 
-	n, err := io.Copy(dst, r)
+	// Decode and write are timed separately, and the wrappers keep this an
+	// explicit buffered loop — see unpack.go for why that matters.
+	tr := &timedReader{r: r}
+	tw := &timedWriter{w: dst}
+	buf := make([]byte, copyBufSize())
+	n, err := io.CopyBuffer(tw, tr, buf)
 	if err != nil {
 		return err
 	}
@@ -202,6 +208,17 @@ func writeFile(path string, r io.Reader, size int64) error {
 	}
 	if n != size {
 		return fmt.Errorf("%s: wrote %d of %d bytes", path, n, size)
+	}
+	if size >= barThreshold {
+		log.Info().
+			Str("file", filepath.Base(path)).
+			Str("size", humanBytes(n)).
+			Int("buf_bytes", len(buf)).
+			Str("decode", time.Duration(tr.ns).Round(time.Second).String()).
+			Str("write", time.Duration(tw.ns).Round(time.Second).String()).
+			Float64("decode_mib_s", throughput(n, tr.ns)).
+			Float64("write_mib_s", throughput(n, tw.ns)).
+			Msg("unpack timing: decode and write are serialized, so these sum to wall clock")
 	}
 	log.Debug().Str("file", filepath.Base(path)).Str("size", humanBytes(n)).Msg("extracted")
 	return nil
